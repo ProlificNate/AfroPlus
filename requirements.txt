@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+matplotlib
+scikit-learn
+mlxtend
+prophet
+google-api-python-client
