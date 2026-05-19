@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -16,9 +15,19 @@ st.set_page_config(page_title="AfroPulse Analytics", layout="wide")
 @st.cache_data
 def load_data():
     df = pd.read_csv("afropulse_dataset_final.csv")
-    df["upload_date"] = pd.to_datetime(df["upload_date"], utc=True).dt.tz_localize(None)
-    df["year"] = df["upload_date"].dt.year
+
+    # ── FIX 1: robust date parsing that handles mixed tz-aware/naive formats ──
+    df["upload_date"] = pd.to_datetime(df["upload_date"], errors="coerce")
+    df["upload_date"] = df["upload_date"].apply(
+        lambda x: x.replace(tzinfo=None) if pd.notnull(x) and x.tzinfo is not None else x
+    )
+
+    df["year"]  = df["upload_date"].dt.year
     df["month"] = df["upload_date"].dt.month
+
+    # ── FIX 2: rebuild year_month so the forecast page always has it ──
+    df["year_month"] = df["upload_date"].dt.to_period("M").astype(str)
+
     df = df[df["year"] >= 2008]
     return df
 
@@ -205,8 +214,8 @@ elif page == "How Do Songs Perform?":
     """)
 
     cluster_df = df[df["genre"] != "Other"].copy()
-    cluster_df["views"] = pd.to_numeric(cluster_df["views"], errors="coerce")
-    cluster_df["likes"] = pd.to_numeric(cluster_df["likes"], errors="coerce")
+    cluster_df["views"]    = pd.to_numeric(cluster_df["views"],    errors="coerce")
+    cluster_df["likes"]    = pd.to_numeric(cluster_df["likes"],    errors="coerce")
     cluster_df["comments"] = pd.to_numeric(cluster_df["comments"], errors="coerce")
     cluster_df.dropna(subset=["views", "likes", "comments"], inplace=True)
     features = cluster_df[["views", "likes", "comments"]].copy()
@@ -295,10 +304,12 @@ elif page == "What Makes a Song Popular?":
     st.markdown("---")
 
     cluster_df = df[df["genre"] != "Other"].copy()
-    cluster_df["views"] = pd.to_numeric(cluster_df["views"], errors="coerce")
-    cluster_df["likes"] = pd.to_numeric(cluster_df["likes"], errors="coerce")
+    cluster_df["views"]    = pd.to_numeric(cluster_df["views"],    errors="coerce")
+    cluster_df["likes"]    = pd.to_numeric(cluster_df["likes"],    errors="coerce")
+    cluster_df["comments"] = pd.to_numeric(cluster_df["comments"], errors="coerce")
     cluster_df.dropna(subset=["views", "likes"], inplace=True)
-    features = cluster_df[["views", "likes", "comments"]].fillna(0)
+    cluster_df["comments"] = cluster_df["comments"].fillna(0)
+    features = cluster_df[["views", "likes", "comments"]]
     scaler = StandardScaler()
     features_scaled = scaler.fit_transform(features)
     kmeans = KMeans(n_clusters=4, random_state=42, n_init=10)
@@ -322,6 +333,10 @@ elif page == "What Makes a Song Popular?":
         4:"Q2 (Apr-Jun)",5:"Q2 (Apr-Jun)",6:"Q2 (Apr-Jun)",
         7:"Q3 (Jul-Sep)",8:"Q3 (Jul-Sep)",9:"Q3 (Jul-Sep)",
         10:"Q4 (Oct-Dec)",11:"Q4 (Oct-Dec)",12:"Q4 (Oct-Dec)"})
+
+    # ── FIX 3: drop rows where binning produced NaN (views/likes exactly 0) ──
+    cluster_df.dropna(subset=["view_level", "like_level", "season", "cluster_label"], inplace=True)
+
     cluster_df["transactions"] = cluster_df.apply(lambda row: [
         str(row["genre"]), str(row["view_level"]),
         str(row["like_level"]), str(row["season"]),
@@ -414,14 +429,22 @@ elif page == "What Will Trend Next?":
     This helps artists plan their release calendar around periods of high audience activity.
     """)
 
-    prophet_df = df.groupby("year_month")["video_id"].count().reset_index()
+    # ── FIX 4: rebuild year_month from upload_date in case CSV version differs ──
+    df_fc = df.copy()
+    df_fc["year_month"] = df_fc["upload_date"].dt.to_period("M").astype(str)
+
+    prophet_df = df_fc.groupby("year_month")["video_id"].count().reset_index()
     prophet_df.columns = ["ds", "y"]
     prophet_df["ds"] = pd.to_datetime(prophet_df["ds"].astype(str))
-    prophet_df = prophet_df.sort_values("ds")
+    prophet_df = prophet_df.sort_values("ds").reset_index(drop=True)
+
+    # ── FIX 5: drop any NaT rows that would crash Prophet ──
+    prophet_df.dropna(subset=["ds"], inplace=True)
+
     model = Prophet(yearly_seasonality=True, weekly_seasonality=False,
-                   daily_seasonality=False, changepoint_prior_scale=0.3)
+                    daily_seasonality=False, changepoint_prior_scale=0.3)
     model.fit(prophet_df)
-    future = model.make_future_dataframe(periods=6, freq="MS")
+    future   = model.make_future_dataframe(periods=6, freq="MS")
     forecast = model.predict(future)
 
     st.markdown("---")
@@ -430,7 +453,7 @@ elif page == "What Will Trend Next?":
     ax.plot(prophet_df["ds"], prophet_df["y"], "o", color="#4da6ff", markersize=3, label="Past Data", alpha=0.6)
     ax.plot(forecast["ds"], forecast["yhat"], color="white", linewidth=2, label="Forecast")
     ax.fill_between(forecast["ds"], forecast["yhat_lower"],
-                   forecast["yhat_upper"], alpha=0.2, color="#4da6ff", label="Likely Range")
+                    forecast["yhat_upper"], alpha=0.2, color="#4da6ff", label="Likely Range")
     ax.axvline(pd.Timestamp("2026-05-01"), color="#f44336", linestyle="--", linewidth=1.5, label="Today")
     ax.set_xlabel("Date", fontsize=11)
     ax.set_ylabel("Number of Songs Released Per Month", fontsize=11)
@@ -461,7 +484,7 @@ elif page == "What Will Trend Next?":
     monthly_avg = monthly_avg.reindex(month_order)
     bar_colors = ["#4caf50" if v == monthly_avg.max() else ("#f44336" if v == monthly_avg.min() else "#4da6ff") for v in monthly_avg.values]
     fig, ax = plt.subplots(figsize=(12, 4))
-    bars = ax.bar(monthly_avg.index, monthly_avg.values, color=bar_colors)
+    ax.bar(monthly_avg.index, monthly_avg.values, color=bar_colors)
     ax.set_ylabel("Relative Activity Score", fontsize=11)
     ax.set_xticklabels(monthly_avg.index, rotation=30, ha="right")
     ax.axhline(0, color="white", linestyle="--", alpha=0.3)
