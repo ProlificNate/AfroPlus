@@ -266,8 +266,8 @@ def hero_section(title, subtitle, desc):
 
 # --- DATA LOADING ---
 @st.cache_data
-def load_data():
-    df = pd.read_csv("afropulse_dataset_final.csv")
+def load_data(file_path="afropulse_dataset_final.csv"):
+    df = pd.read_csv(file_path)
     df["upload_date"] = pd.to_datetime(df["upload_date"], errors="coerce")
     df["upload_date"] = df["upload_date"].apply(
         lambda x: x.replace(tzinfo=None) if pd.notnull(x) and x.tzinfo is not None else x
@@ -278,7 +278,7 @@ def load_data():
     df = df[df["year"] >= 2008]
     return df
 
-df = load_data()
+df = load_data("afropulse_dataset_final.csv")
 
 # --- SIDEBAR ---
 st.sidebar.markdown("""
